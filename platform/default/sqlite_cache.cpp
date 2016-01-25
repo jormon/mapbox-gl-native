@@ -64,7 +64,7 @@ SQLiteCache::Impl::~Impl() {
 }
 
 void SQLiteCache::Impl::createDatabase() {
-    db = std::make_unique<Database>(path.c_str(), ReadWrite | Create);
+    db = std::make_shared<Database>(path.c_str(), ReadWrite | Create);
 }
 
 int SQLiteCache::Impl::schemaVersion() const {
@@ -88,56 +88,11 @@ void SQLiteCache::Impl::createSchema() {
         ");"
         "CREATE INDEX IF NOT EXISTS `http_cache_kind_idx` ON `http_cache` (`kind`);"
         "CREATE INDEX IF NOT EXISTS `http_cache_accessed_idx` ON `http_cache` (`accessed`);";
-
-    ensureSchemaVersion();
-
-    try {
-        db->exec(sql);
-        db->exec("PRAGMA user_version = " + util::toString(schemaVersion()));
-        schema = true;
-    } catch (mapbox::sqlite::Exception &ex) {
-        if (ex.code == SQLITE_NOTADB) {
-            Log::Warning(Event::Database, "Trashing invalid database");
-            db.reset();
-            try {
-                util::deleteFile(path);
-            } catch (util::IOException& ioEx) {
-                Log::Error(Event::Database, ex.code, ex.what());
-            }
-            db = std::make_unique<Database>(path.c_str(), ReadWrite | Create);
-        } else {
-            Log::Error(Event::Database, ex.code, ex.what());
-        }
-
-        // Creating the database table + index failed. That means there may already be one, likely
-        // with different columns. Drop it and try to create a new one.
-        db->exec("DROP TABLE IF EXISTS `http_cache`");
-        db->exec(sql);
-        db->exec("PRAGMA user_version = " + util::toString(schemaVersion()));
-    }
+    schema = database_createSchema(db, path, sql, schemaVersion(), "http_cache");
 }
 
 void SQLiteCache::Impl::ensureSchemaVersion() {
-    try {
-       Statement userVersionStmt(db->prepare("PRAGMA user_version"));
-       if (userVersionStmt.run() && userVersionStmt.get<int>(0) == schemaVersion()) {
-           return;
-       }
-    } catch (mapbox::sqlite::Exception& ex) {
-        if (ex.code == SQLITE_NOTADB) {
-            return;
-        }
-
-        Log::Error(Event::Database, ex.code, ex.what());
-    }
-
-    // Version mismatch, drop the table so it will
-    // get recreated by `createSchema()`.
-    try {
-        db->exec("DROP TABLE IF EXISTS `http_cache`");
-    } catch (mapbox::sqlite::Exception& ex) {
-        Log::Error(Event::Database, ex.code, ex.what());
-    }
+    db->ensureSchemaVersion(schemaVersion(), "http_cache");
 }
 
 void SQLiteCache::setMaximumCacheSize(uint64_t size) {

@@ -77,6 +77,7 @@
         'storage/cache_stale.cpp',
         'storage/database.cpp',
         'storage/asset_file_source.cpp',
+        'storage/offline_file_source.cpp',
         'storage/headers.cpp',
         'storage/http_cancel.cpp',
         'storage/http_error.cpp',

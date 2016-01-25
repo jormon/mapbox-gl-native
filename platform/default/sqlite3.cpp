@@ -1,3 +1,8 @@
+#include <mbgl/platform/log.hpp>
+#include <mbgl/util/compression.hpp>
+#include <mbgl/util/io.hpp>
+#include <mbgl/util/string.hpp>
+
 #include "sqlite3.hpp"
 #include <sqlite3.h>
 
@@ -167,11 +172,11 @@ template <> void Statement::bind(int offset, optional<std::chrono::system_clock:
     }
 }
 
-bool Statement::run() {
+bool Statement::run(bool expectResults) const {
     assert(stmt);
     const int err = sqlite3_step(stmt);
     if (err == SQLITE_DONE) {
-        return false;
+        return !expectResults;
     } else if (err == SQLITE_ROW) {
         return true;
     } else if (err != SQLITE_OK) {
@@ -181,22 +186,22 @@ bool Statement::run() {
     }
 }
 
-template <> int Statement::get(int offset) {
+template <> int Statement::get(int offset) const {
     assert(stmt);
     return sqlite3_column_int(stmt, offset);
 }
 
-template <> int64_t Statement::get(int offset) {
+template <> int64_t Statement::get(int offset) const {
     assert(stmt);
     return sqlite3_column_int64(stmt, offset);
 }
 
-template <> double Statement::get(int offset) {
+template <> double Statement::get(int offset) const {
     assert(stmt);
     return sqlite3_column_double(stmt, offset);
 }
 
-template <> std::string Statement::get(int offset) {
+template <> std::string Statement::get(int offset) const {
     assert(stmt);
     return {
         reinterpret_cast<const char *>(sqlite3_column_blob(stmt, offset)),
@@ -204,12 +209,12 @@ template <> std::string Statement::get(int offset) {
     };
 }
 
-template <> std::chrono::system_clock::time_point Statement::get(int offset) {
+template <> std::chrono::system_clock::time_point Statement::get(int offset) const {
     assert(stmt);
     return std::chrono::system_clock::from_time_t(sqlite3_column_int64(stmt, offset));
 }
 
-template <> optional<std::string> Statement::get(int offset) {
+template <> optional<std::string> Statement::get(int offset) const {
     assert(stmt);
     if (sqlite3_column_type(stmt, offset) == SQLITE_NULL) {
         return optional<std::string>();
@@ -218,7 +223,7 @@ template <> optional<std::string> Statement::get(int offset) {
     }
 }
 
-template <> optional<std::chrono::system_clock::time_point> Statement::get(int offset) {
+template <> optional<std::chrono::system_clock::time_point> Statement::get(int offset) const {
     assert(stmt);
     if (sqlite3_column_type(stmt, offset) == SQLITE_NULL) {
         return optional<std::chrono::system_clock::time_point>();
@@ -232,5 +237,100 @@ void Statement::reset() {
     sqlite3_reset(stmt);
 }
 
+
+bool Database::ensureSchemaVersion(const int schemaVersion, const std::string &tableName) {
+    try {
+        Statement userVersionStmt(prepare("PRAGMA user_version"));
+        if (userVersionStmt.run() && userVersionStmt.get<int>(0) == schemaVersion) {
+            return true;
+        }
+    } catch (mapbox::sqlite::Exception& ex) {
+        if (ex.code == SQLITE_NOTADB) {
+            return false;
+        }
+        
+        mbgl::Log::Error(mbgl::Event::Database, ex.code, ex.what());
+    }
+    
+    // Version mismatch, drop the table so it will
+    // get recreated.
+    try {
+        exec("DROP TABLE IF EXISTS `" + tableName + "`");
+    } catch (mapbox::sqlite::Exception& ex) {
+        mbgl::Log::Error(mbgl::Event::Database, ex.code, ex.what());
+    }
+    return false;
+}
+
+void Database::retrieveCachedData(const Statement &query,
+                        bool compressed,
+                        std::function<void (mbgl::Response)> callback,
+                        std::function<void (std::function<void (void)>)> retrieve) {
+    (void)retrieve;
+    if (query.run()) {
+        mbgl::Response cacheResponse;
+        if (compressed) {
+            cacheResponse.data = std::make_shared<std::string>(mbgl::util::decompress(query.get<std::string>(0)));
+        } else {
+            cacheResponse.data = std::make_shared<std::string>(query.get<std::string>(0));
+        }
+        callback(cacheResponse);
+    } else {
+        retrieve([&query, compressed, callback] () {
+            if (query.run()) {
+                mbgl::Response cacheResponse;
+                if (compressed) {
+                    cacheResponse.data = std::make_shared<std::string>(mbgl::util::decompress(query.get<std::string>(0)));
+                } else {
+                    cacheResponse.data = std::make_shared<std::string>(query.get<std::string>(0));
+                }
+                callback(cacheResponse);
+            } else {
+                mbgl::Response cacheResponse;
+                cacheResponse.error = std::make_unique<mbgl::Response::Error>(mbgl::Response::Error::Reason::NotFound);
+                callback(cacheResponse);
+            }
+        });
+    }
+}
+    
+bool database_createSchema(std::shared_ptr<Database> db,
+                           const std::string &path,
+                           const char *const sql,
+                           const int schemaVersion,
+                           const std::string &tableName) {
+    if (db->ensureSchemaVersion(schemaVersion, tableName)) {
+        return true;
+    }
+    
+    try {
+        db->exec(sql);
+        db->exec("PRAGMA user_version = " + mbgl::util::toString(schemaVersion));
+        return true;
+    } catch (mapbox::sqlite::Exception &ex) {
+        if (ex.code == SQLITE_NOTADB) {
+            mbgl::Log::Warning(mbgl::Event::Database, "Trashing invalid database");
+            db.reset();
+            try {
+                mbgl::util::deleteFile(path);
+            } catch (mbgl::util::IOException& ioEx) {
+                mbgl::Log::Error(mbgl::Event::Database, ex.code, ex.what());
+            }
+            db = std::make_unique<Database>(path.c_str(), ReadWrite | Create);
+        } else {
+            mbgl::Log::Error(mbgl::Event::Database, ex.code, ex.what());
+        }
+        
+        // Creating the database table + index failed. That means there may already be one, likely
+        // with different columns. Drop it and try to create a new one.
+        db->exec("DROP TABLE IF EXISTS `http_cache`");
+        db->exec(sql);
+        db->exec("PRAGMA user_version = " + mbgl::util::toString(schemaVersion));
+        return false;
+    }
+    return false;
+}
+
+    
 } // namespace sqlite
 } // namespace mapbox

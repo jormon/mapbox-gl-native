@@ -52,7 +52,7 @@ private:
     uint64_t maximumCacheEntrySize;
 
     const std::string path;
-    std::unique_ptr<::mapbox::sqlite::Database> db;
+    std::shared_ptr<::mapbox::sqlite::Database> db;
     std::unique_ptr<::mapbox::sqlite::Statement> getStmt;
     std::unique_ptr<::mapbox::sqlite::Statement> putStmt;
     std::unique_ptr<::mapbox::sqlite::Statement> refreshStmt;
