@@ -1,4 +1,5 @@
 #include <mbgl/platform/log.hpp>
+#include <mbgl/util/compression.hpp>
 #include <mbgl/util/io.hpp>
 #include <mbgl/util/string.hpp>
 
@@ -154,7 +155,7 @@ void Statement::bind(int offset, const std::string &value, bool retain) {
     BIND_5(blob, value.data(), int(value.size()), retain ? SQLITE_TRANSIENT : SQLITE_STATIC, stmt)
 }
 
-bool Statement::run(bool expectResults) {
+bool Statement::run(bool expectResults) const {
     assert(stmt);
     const int err = sqlite3_step(stmt);
     if (err == SQLITE_DONE) {
@@ -167,22 +168,22 @@ bool Statement::run(bool expectResults) {
     }
 }
 
-template <> int Statement::get(int offset) {
+template <> int Statement::get(int offset) const {
     assert(stmt);
     return sqlite3_column_int(stmt, offset);
 }
 
-template <> int64_t Statement::get(int offset) {
+template <> int64_t Statement::get(int offset) const {
     assert(stmt);
     return sqlite3_column_int64(stmt, offset);
 }
 
-template <> double Statement::get(int offset) {
+template <> double Statement::get(int offset) const {
     assert(stmt);
     return sqlite3_column_double(stmt, offset);
 }
 
-template <> std::string Statement::get(int offset) {
+template <> std::string Statement::get(int offset) const {
     assert(stmt);
     return {
         reinterpret_cast<const char *>(sqlite3_column_blob(stmt, offset)),
@@ -219,7 +220,39 @@ bool Database::ensureSchemaVersion(const int schemaVersion, const std::string &t
     }
     return false;
 }
-  
+
+void Database::retrieveCachedData(const Statement &query,
+                        bool compressed,
+                        std::function<void (mbgl::Response)> callback,
+                        std::function<void (std::function<void (void)>)> retrieve) {
+    (void)retrieve;
+    if (query.run()) {
+        mbgl::Response cacheResponse;
+        if (compressed) {
+            cacheResponse.data = std::make_shared<std::string>(mbgl::util::decompress(query.get<std::string>(0)));
+        } else {
+            cacheResponse.data = std::make_shared<std::string>(query.get<std::string>(0));
+        }
+        callback(cacheResponse);
+    } else {
+        retrieve([&query, compressed, callback] () {
+            if (query.run()) {
+                mbgl::Response cacheResponse;
+                if (compressed) {
+                    cacheResponse.data = std::make_shared<std::string>(mbgl::util::decompress(query.get<std::string>(0)));
+                } else {
+                    cacheResponse.data = std::make_shared<std::string>(query.get<std::string>(0));
+                }
+                callback(cacheResponse);
+            } else {
+                mbgl::Response cacheResponse;
+                cacheResponse.error = std::make_unique<mbgl::Response::Error>(mbgl::Response::Error::Reason::NotFound);
+                callback(cacheResponse);
+            }
+        });
+    }
+}
+    
 bool database_createSchema(std::shared_ptr<Database> db,
                            const std::string &path,
                            const char *const sql,

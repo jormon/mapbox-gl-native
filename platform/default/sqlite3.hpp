@@ -2,6 +2,7 @@
 
 #include <string>
 #include <stdexcept>
+#include <mbgl/storage/response.hpp>
 
 typedef struct sqlite3 sqlite3;
 typedef struct sqlite3_stmt sqlite3_stmt;
@@ -26,7 +27,7 @@ struct Exception : std::runtime_error {
 };
 
 class Statement;
-
+    
 class Database {
 private:
     Database(const Database &) = delete;
@@ -43,6 +44,17 @@ public:
     void exec(const std::string &sql);
     Statement prepare(const char *query);
     bool ensureSchemaVersion(const int schemaVersion, const std::string &tableName);
+    
+    //Retrieves cached data for a query.  The data is assumed to be a blob, and is assumed to be in
+    //column 0.  If compressed is true, the data is compressed/uncompressed.  If the data is missing,
+    //retrieve is called, and if it returns true, the query is run again.  If anything goes wrong,
+    //false is returned and the response is called with an error code.
+    void retrieveCachedData(const Statement &query,
+                            bool compressed,
+                            std::function<void (mbgl::Response)> callback,
+                            std::function<void (std::function<void (void)>)> retrieve);
+
+    
     
 private:
     sqlite3 *db = nullptr;
@@ -70,9 +82,9 @@ public:
 
     template <typename T> void bind(int offset, T value);
     void bind(int offset, const std::string &value, bool retain = true);
-    template <typename T> T get(int offset);
+    template <typename T> T get(int offset) const;
 
-    bool run(bool expectResults = true);
+    bool run(bool expectResults = true) const;
     void reset();
 
 private:

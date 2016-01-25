@@ -129,60 +129,45 @@ void OfflineFileSource::Impl::handleDownloadStyle(const std::string &url, Callba
         const auto name = util::mapbox::canonicalURL(url);
         getStmt.bind(1, name.c_str());
         getStmt.bind(2, (int)Resource::Kind::Style);
-        if (getStmt.run()) {
-            Response response;
-            //The data is going to be a string representation of JSON
-            response.data = std::make_shared<std::string>(mbgl::util::decompress(getStmt.get<std::string>(0)));
-            callback(response);
-        } else {
-            //Actually download the style
-            Log::Error(Event::Setup, "loading style %s", url.c_str());
-            styleRequest = onlineFileSource->request({ Resource::Kind::Style, url }, [this, url, name, callback](Response res) {
-                if (res.stale) {
-                    // Only handle fresh responses.
-                    return;
-                }
-                styleRequest = nullptr;
-                
-                if (res.error) {
-                    if (res.error->reason == Response::Error::Reason::NotFound && url.find("mapbox://") == 0) {
-                        Log::Error(Event::Setup, "style %s could not be found or is an incompatible legacy map or style", url.c_str());
-                    } else {
-                        Log::Error(Event::Setup, "loading style failed: %s", res.error->message.c_str());
-                    }
-                } else {
-                    //loadStyleJSON(*res.data, base);
-                    //Put this new data in the DB and then call handleDownloadStyle again
-                    std::unique_ptr<::mapbox::sqlite::Database> dbWritable;
-                    dbWritable = std::make_unique<Database>(path.c_str(), ReadWrite | Create);
-                    
-                    bool insertStmtResult;
-                    {
-                        Statement insertStmt = dbWritable->prepare("INSERT INTO resources (url, kind, status, data, compressed) VALUES (?, ?, ?, ?, ?)");
-                        insertStmt.bind(1, url.c_str());
-                        insertStmt.bind(2, (int)Resource::Kind::Style);
-                        insertStmt.bind(3, 0);  //Status OK
-                        insertStmt.bind(4, mbgl::util::compress(*res.data.get()));
-                        insertStmt.bind(5, 1);
-                        insertStmtResult = insertStmt.run(false);
-                    }
-                    if (insertStmtResult) {
-                        //Start over
-                        Log::Error(Event::Database, "Successfully downloaded and stored style, starting over");
-                        db.reset();
-                        handleDownloadStyle(url, callback);
-                        return;
-                    } else {
-                        Response response;
-                        response.error = std::make_unique<Response::Error>(Response::Error::Reason::Other);
-                        callback(response);
-                    }
-                }
-                
-            });
-        }
-
         
+        db->retrieveCachedData(getStmt, true, callback,
+                               [this, url, name, callback] (std::function<void (void)> continuation) {
+                                   Log::Error(Event::Setup, "loading style %s", url.c_str());
+                                   styleRequest = onlineFileSource->request({ Resource::Kind::Style, url },
+                                                                            [this, url, name, callback, continuation](Response res) {
+                                       if (res.stale) {
+                                           // Only handle fresh responses.
+                                           return;
+                                       }
+                                       styleRequest = nullptr;
+                                       
+                                       if (res.error) {
+                                           if (res.error->reason == Response::Error::Reason::NotFound && url.find("mapbox://") == 0) {
+                                               Log::Error(Event::Setup, "style %s could not be found or is an incompatible legacy map or style", url.c_str());
+                                           } else {
+                                               Log::Error(Event::Setup, "loading style failed: %s", res.error->message.c_str());
+                                           }
+                                       } else {
+                                           bool insertStmtResult;
+                                           {
+                                               Statement insertStmt = db->prepare("INSERT INTO resources (url, kind, status, data, compressed) VALUES (?, ?, ?, ?, ?)");
+                                               insertStmt.bind(1, url.c_str());
+                                               insertStmt.bind(2, (int)Resource::Kind::Style);
+                                               insertStmt.bind(3, 0);  //Status OK
+                                               insertStmt.bind(4, mbgl::util::compress(*res.data.get()));
+                                               insertStmt.bind(5, 1);
+                                               insertStmtResult = insertStmt.run(false);
+                                           }
+                                           if (insertStmtResult) {
+                                               continuation();
+                                           } else {
+                                               Response response;
+                                               response.error = std::make_unique<Response::Error>(Response::Error::Reason::Other);
+                                               callback(response);
+                                           }
+                                       }
+                                    });
+                               });
     } catch(const std::exception& ex) {
         Log::Error(Event::Database, ex.what());
         std::string exAsString = std::string(ex.what());
