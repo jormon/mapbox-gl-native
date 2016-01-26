@@ -64,12 +64,12 @@ public:
     }
 };
 
-OfflineFileSource::OfflineFileSource(OnlineFileSource *inOnlineFileSource)
+OfflineFileSource::OfflineFileSource(FileSource *inOnlineFileSource)
     : thread(std::make_unique<util::Thread<Impl>>(util::ThreadContext{ "OfflineFileSource", util::ThreadType::Unknown, util::ThreadPriority::Low },  inOnlineFileSource)),
       onlineFileSource(inOnlineFileSource) {
 }
     
-OfflineFileSource::OfflineFileSource(OnlineFileSource *inOnlineFileSource, const std::string &offlineDatabasePath)
+OfflineFileSource::OfflineFileSource(FileSource *inOnlineFileSource, const std::string &offlineDatabasePath)
     : thread(std::make_unique<util::Thread<Impl>>(util::ThreadContext{ "OfflineFileSource", util::ThreadType::Unknown, util::ThreadPriority::Low },  inOnlineFileSource, offlineDatabasePath)),
       onlineFileSource(inOnlineFileSource) {
 }
@@ -78,8 +78,8 @@ OfflineFileSource::~OfflineFileSource() = default;
 
 class OfflineFileSource::Impl {
 public:
-    explicit Impl(OnlineFileSource *inOnlineFileSource);
-    explicit Impl(OnlineFileSource *inOnlineFileSource, const std::string &offlineDatabasePath);
+    explicit Impl(FileSource *inOnlineFileSource);
+    explicit Impl(FileSource *inOnlineFileSource, const std::string &offlineDatabasePath);
     ~Impl();
 
     void handleRequest(Resource, Callback);
@@ -90,16 +90,16 @@ private:
 
     const std::string path;
     std::shared_ptr<::mapbox::sqlite::Database> db;
-    OnlineFileSource *onlineFileSource;
+    FileSource *onlineFileSource;
     std::unique_ptr<FileRequest> styleRequest;
 };
 
-OfflineFileSource::Impl::Impl( OnlineFileSource *inOnlineFileSource)
+OfflineFileSource::Impl::Impl( FileSource *inOnlineFileSource)
     : path(),
       onlineFileSource(inOnlineFileSource) {
 }
     
-OfflineFileSource::Impl::Impl( OnlineFileSource *inOnlineFileSource, const std::string &offlineDatabasePath)
+OfflineFileSource::Impl::Impl( FileSource *inOnlineFileSource, const std::string &offlineDatabasePath)
     : path(offlineDatabasePath),
       onlineFileSource(inOnlineFileSource) {
 }

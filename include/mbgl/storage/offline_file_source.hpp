@@ -15,8 +15,8 @@ template <typename T> class Thread;
 
 class OfflineFileSource : public FileSource {
 public:
-    OfflineFileSource(OnlineFileSource *inOnlineFileSource);
-    OfflineFileSource(OnlineFileSource *inOnlineFileSource, const std::string &offlineDatabasePath);
+    OfflineFileSource(FileSource *inOnlineFileSource);
+    OfflineFileSource(FileSource *inOnlineFileSource, const std::string &offlineDatabasePath);
     ~OfflineFileSource() override;
 
     std::unique_ptr<FileRequest> request(const Resource&, Callback) override;
@@ -33,7 +33,7 @@ public:
     class Impl;
     const std::unique_ptr<util::Thread<Impl>> thread;
 private:
-    OnlineFileSource *onlineFileSource;
+    FileSource *onlineFileSource;
     
     std::unique_ptr<FileRequest> downloadStyle(const std::string &url, Callback callback);
 };
