@@ -5,7 +5,7 @@
 
 namespace mbgl {
 
-class SQLiteCache;
+class OfflineDatabase;
 
 class DefaultFileSource : public FileSource {
 public:
@@ -20,8 +20,9 @@ public:
 
     std::unique_ptr<FileRequest> request(const Resource&, Callback) override;
 
-    // For testing purposes only.
-    SQLiteCache& getCache();
+    // For testing only.
+    void put(const Resource&, const Response&);
+    void goOffline();
 
 private:
     class Impl;
