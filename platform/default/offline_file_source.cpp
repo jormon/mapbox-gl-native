@@ -8,6 +8,7 @@
 #include <mbgl/util/io.hpp>
 #include <mbgl/util/mapbox.hpp>
 #include <mbgl/util/string.hpp>
+#include <mbgl/util/compression.hpp>
 #include <mbgl/platform/log.hpp>
 
 #include <cassert>
@@ -15,8 +16,6 @@
 
 #include "sqlite3.hpp"
 #include <sqlite3.h>
-
-#include "compression.hpp"
 
 //Resource::Kind::Style
 
