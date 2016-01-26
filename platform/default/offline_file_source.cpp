@@ -180,13 +180,10 @@ void OfflineFileSource::Impl::handleRequest(Resource resource, Callback callback
         }
 
         if (resource.kind == Resource::Kind::Tile) {
-            const auto canonicalURL = util::mapbox::canonicalURL(resource.url);
-            auto parts = util::split(canonicalURL, "/");
-            const int8_t  z = atoi(parts[parts.size() - 3].c_str());
-            const int32_t x = atoi(parts[parts.size() - 2].c_str());
-            const int32_t y = atoi(util::split(util::split(parts[parts.size() - 1], ".")[0], "@")[0].c_str());
-
-            const auto id = TileID(z, x, (pow(2, z) - y - 1), z); // flip y for MBTiles
+            const auto id = TileID(resource.tileData->z,
+                       resource.tileData->x,
+                       (pow(2, resource.tileData->z) - resource.tileData->y - 1),
+                       resource.tileData->z); // flip y for MBTiles
 
             Statement getStmt = db->prepare("SELECT `tile_data` FROM `tiles` WHERE `zoom_level` = ? AND `tile_column` = ? AND `tile_row` = ?");
 
