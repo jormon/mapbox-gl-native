@@ -5,9 +5,11 @@ import android.support.annotation.NonNull;
 import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.Toolbar;
+import android.util.Log;
 import android.view.MenuItem;
 
 import com.mapbox.mapboxsdk.annotations.MarkerOptions;
+import com.mapbox.mapboxsdk.constants.MapboxConstants;
 import com.mapbox.mapboxsdk.maps.CameraUpdateFactory;
 import com.mapbox.mapboxsdk.constants.Style;
 import com.mapbox.mapboxsdk.geometry.LatLng;
@@ -20,9 +22,10 @@ import com.mapbox.mapboxsdk.maps.MapView;
 
 public class VisibleCoordinateBoundsActivity extends AppCompatActivity {
 
-    private MapView mMapView;
     private static final LatLng LOS_ANGELES = new LatLng(34.053940, -118.242622);
     private static final LatLng NEW_YORK = new LatLng(40.712730, -74.005953);
+
+    private MapView mMapView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -68,8 +71,11 @@ public class VisibleCoordinateBoundsActivity extends AppCompatActivity {
                 // And padding
                 int padding = (int) getResources().getDimension(R.dimen.coordinatebounds_margin);
 
-                // Animate camera
-                mapboxMap.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, padding));
+                // Move camera to the bounds with padding
+                mapboxMap.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds, padding));
+
+                // Call mapboxMap.getProjection().getVisibleRegion() to retrieve the bounds
+                Log.v(MapboxConstants.TAG, mapboxMap.getProjection().getVisibleRegion().toString());
             }
         });
 

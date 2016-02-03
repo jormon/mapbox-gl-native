@@ -2,7 +2,7 @@ package com.mapbox.mapboxsdk.maps;
 
 import android.Manifest;
 import android.content.Context;
-import android.graphics.PointF;
+
 import android.location.Location;
 import android.os.Bundle;
 import android.support.annotation.FloatRange;
@@ -39,6 +39,7 @@ public class MapboxMap {
 
     private MapView mMapView;
     private UiSettings mUiSettings;
+    private Projection mProjection;
     private CameraPosition mCameraPosition;
     private String mStyleUrl;
     private List<Marker> mSelectedMarkers;
@@ -61,6 +62,7 @@ public class MapboxMap {
     MapboxMap(@NonNull MapView mapView) {
         mMapView = mapView;
         mUiSettings = new UiSettings(mapView);
+        mProjection = new Projection(mapView);
         mSelectedMarkers = new ArrayList<>();
         mInfoWindows = new ArrayList<>();
     }
@@ -76,6 +78,17 @@ public class MapboxMap {
      */
     public UiSettings getUiSettings() {
         return mUiSettings;
+    }
+
+    //
+    // Projection
+    //
+
+    /**
+     * Get the Projection object that you can use to convert between screen coordinates and latitude/longitude coordinates.
+     */
+    public Projection getProjection() {
+        return mProjection;
     }
 
     //
@@ -413,49 +426,6 @@ public class MapboxMap {
     @Nullable
     public String getAccessToken() {
         return mMapView.getAccessToken();
-    }
-
-    //
-    // Projection
-    //
-
-    /**
-     * Converts a point in this view's coordinate system to a map coordinate.
-     *
-     * @param point A point in this view's coordinate system.
-     * @return The converted map coordinate.
-     */
-    @UiThread
-    @NonNull
-    public LatLng fromScreenLocation(@NonNull PointF point) {
-        return mMapView.fromScreenLocation(point);
-    }
-
-    /**
-     * Converts a map coordinate to a point in this view's coordinate system.
-     *
-     * @param location A map coordinate.
-     * @return The converted point in this view's coordinate system.
-     */
-    @UiThread
-    @NonNull
-    public PointF toScreenLocation(@NonNull LatLng location) {
-        return mMapView.toScreenLocation(location);
-    }
-
-    /**
-     * <p>
-     * Returns the distance spanned by one pixel at the specified latitude and current zoom level.
-     * </p>
-     * The distance between pixels decreases as the latitude approaches the poles.
-     * This relationship parallels the relationship between longitudinal coordinates at different latitudes.
-     *
-     * @param latitude The latitude for which to return the value.
-     * @return The distance measured in meters.
-     */
-    @UiThread
-    public double getMetersPerPixelAtLatitude(@FloatRange(from = -180, to = 180) double latitude) {
-        return mMapView.getMetersPerPixelAtLatitude(latitude);
     }
 
     //
@@ -1036,7 +1006,7 @@ public class MapboxMap {
         mMapView.invalidateCustomLayers();
     }
 
-    MapView getMapView(){
+    MapView getMapView() {
         return mMapView;
     }
 
