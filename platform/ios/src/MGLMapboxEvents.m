@@ -132,6 +132,7 @@ const NSTimeInterval MGLFlushInterval = 60;
 @property (atomic) NSData *geoTrustCert;
 @property (atomic) NSData *testServerCert;
 @property (atomic) BOOL usesTestServer;
+@property (atomic, getter=isDeferringUpdates) BOOL deferringUpdates;
 
 // Main thread only
 @property (nonatomic) CLLocationManager *locationManager;
@@ -333,6 +334,18 @@ const NSTimeInterval MGLFlushInterval = 60;
 
 - (void)validateUpdatingLocation {
     MGLAssertIsMainThread();
+
+//    if ([CLLocationManager deferredLocationUpdatesAvailable]) {
+//        if (self.isDeferringUpdates) {
+//            [self.locationManager disallowDeferredLocationUpdates];
+//            self.deferringUpdates = NO;
+//            if ([self debugLoggingEnabled]) {
+//                [MGLMapboxEvents pushDebugEvent:MGLEventTypeLocalDebug
+//                                 withAttributes:@{MGLEventKeyLocalDebugDescription: @"defer.stopped"}];
+//            }
+//        }
+//    }
+    
     if (self.paused) {
         [self stopUpdatingLocation];
     } else {
@@ -417,10 +430,11 @@ const NSTimeInterval MGLFlushInterval = 60;
         return;
     }
     _locationManager = [[CLLocationManager alloc] init];
-    _locationManager.desiredAccuracy = kCLLocationAccuracyKilometer;
-    _locationManager.distanceFilter = 10;
+    _locationManager.desiredAccuracy = kCLLocationAccuracyBest;
+    _locationManager.distanceFilter = kCLDistanceFilterNone;
     _locationManager.delegate = self;
 
+    // TODO: if in foreground, then disable deferred location updates
     [_locationManager startUpdatingLocation];
 
     // -[CLLocationManager startMonitoringVisits] is only available in iOS 8+.
@@ -863,6 +877,43 @@ const NSTimeInterval MGLFlushInterval = 60;
             MGLEventKeyHorizontalAccuracy: @(round(loc.horizontalAccuracy)),
             MGLEventKeyVerticalAccuracy: @(round(loc.verticalAccuracy))
         }];
+    }
+    
+    [MGLMapboxEvents pushDebugEvent:MGLEventTypeLocalDebug
+                     withAttributes:@{MGLEventKeyLocalDebugDescription: @"defer.attempting_start"}];
+    if ([CLLocationManager deferredLocationUpdatesAvailable]) {
+        if (!self.isDeferringUpdates) {
+            CLLocationDistance oneThousandMeters = 1000;
+            NSTimeInterval oneHour = 3600;
+            [manager allowDeferredLocationUpdatesUntilTraveled:oneThousandMeters timeout:oneHour];
+            self.deferringUpdates = YES;
+            if ([self debugLoggingEnabled]) {
+                [MGLMapboxEvents pushDebugEvent:MGLEventTypeLocalDebug
+                                 withAttributes:@{MGLEventKeyLocalDebugDescription: @"defer.started"}];
+            }
+        } else {
+            [MGLMapboxEvents pushDebugEvent:MGLEventTypeLocalDebug
+                             withAttributes:@{MGLEventKeyLocalDebugDescription: @"defer.deferred_location_already_started"}];
+        }
+    } else {
+        [MGLMapboxEvents pushDebugEvent:MGLEventTypeLocalDebug
+                         withAttributes:@{MGLEventKeyLocalDebugDescription: @"defer.deferred_location_unavailable"}];
+    }
+}
+
+- (void)locationManager:(CLLocationManager *)manager didFinishDeferredUpdatesWithError:(NSError *)error {
+    self.deferringUpdates = NO;
+    if (error) {
+        if ([self debugLoggingEnabled]) {
+            [MGLMapboxEvents pushDebugEvent:MGLEventTypeLocalDebug
+                             withAttributes:@{MGLEventKeyLocalDebugDescription: @"defer.finished.error",
+                                              @"error.code": @(error.code)}];
+        }
+        return;
+    }
+    if ([self debugLoggingEnabled]) {
+        [MGLMapboxEvents pushDebugEvent:MGLEventTypeLocalDebug
+                         withAttributes:@{MGLEventKeyLocalDebugDescription: @"defer.finished.success"}];
     }
 }
 
