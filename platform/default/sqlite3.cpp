@@ -77,6 +77,11 @@ Statement Database::prepare(const char *query) {
     return Statement(db, query);
 }
 
+int64_t Database::lastInsertRowid() const {
+    assert(db);
+    return sqlite3_last_insert_rowid(db);
+}
+
 Statement::Statement(sqlite3 *db, const char *sql) {
     const int err = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
     if (err != SQLITE_OK) {
@@ -172,6 +177,12 @@ template <> void Statement::bind(int offset, const char *value) {
 
 void Statement::bind(int offset, const std::string& value, bool retain) {
     assert(stmt);
+    check(sqlite3_bind_text(stmt, offset, value.data(), int(value.size()),
+                            retain ? SQLITE_TRANSIENT : SQLITE_STATIC));
+}
+
+void Statement::bind(int offset, const std::vector<uint8_t>& value, bool retain) {
+    assert(stmt);
     check(sqlite3_bind_blob(stmt, offset, value.data(), int(value.size()),
                             retain ? SQLITE_TRANSIENT : SQLITE_STATIC));
 }
@@ -232,6 +243,13 @@ template <> std::string Statement::get(int offset) {
         reinterpret_cast<const char *>(sqlite3_column_blob(stmt, offset)),
         size_t(sqlite3_column_bytes(stmt, offset))
     };
+}
+
+template <> std::vector<uint8_t> Statement::get(int offset) {
+    assert(stmt);
+    const uint8_t* begin = reinterpret_cast<const uint8_t*>(sqlite3_column_blob(stmt, offset));
+    const uint8_t* end   = begin + sqlite3_column_bytes(stmt, offset);
+    return { begin, end };
 }
 
 template <> std::chrono::system_clock::time_point Statement::get(int offset) {

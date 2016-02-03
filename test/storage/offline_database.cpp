@@ -1,4 +1,5 @@
 #include "../fixtures/fixture_log_observer.hpp"
+#include "../fixtures/stub_file_source.hpp"
 
 #include <mbgl/storage/offline_database.hpp>
 #include <mbgl/storage/resource.hpp>
@@ -96,8 +97,9 @@ TEST(OfflineDatabase, Create) {
     deleteFile("test/fixtures/database/offline.db");
 
     Log::setObserver(std::make_unique<FixtureLogObserver>());
-
-    OfflineDatabase db("test/fixtures/database/offline.db");
+    util::RunLoop loop;
+    StubFileSource fileSource;
+    OfflineDatabase db("test/fixtures/database/offline.db", fileSource);
 
     db.get({ Resource::Unknown, "mapbox://test" }, [] (optional<Response> res) {
         EXPECT_FALSE(bool(res));
@@ -114,9 +116,11 @@ TEST(OfflineDatabase, SchemaVersion) {
     std::string path("test/fixtures/database/offline.db");
 
     Log::setObserver(std::make_unique<FixtureLogObserver>());
+    util::RunLoop loop;
+    StubFileSource fileSource;
 
     {
-        OfflineDatabase db(path);
+        OfflineDatabase db(path, fileSource);
         Response response;
         response.error = std::make_unique<Response::Error>(Response::Error::Reason::NotFound);
         db.put({ Resource::Unknown, "mapbox://test" }, response);
@@ -132,7 +136,7 @@ TEST(OfflineDatabase, SchemaVersion) {
     // Changing the version will force the database to get recreated
     // thus removing every pre-existing cache entry.
     {
-        OfflineDatabase db(path);
+        OfflineDatabase db(path, fileSource);
 
         db.get({ Resource::Unknown, "mapbox://test" }, [] (optional<Response> res) {
             EXPECT_FALSE(bool(res));
@@ -152,8 +156,9 @@ TEST(OfflineDatabase, Invalid) {
     writeFile("test/fixtures/database/invalid.db", "this is an invalid file");
 
     Log::setObserver(std::make_unique<FixtureLogObserver>());
-
-    OfflineDatabase db("test/fixtures/database/invalid.db");
+    util::RunLoop loop;
+    StubFileSource fileSource;
+    OfflineDatabase db("test/fixtures/database/invalid.db", fileSource);
 
     auto observer = Log::removeObserver();
     auto flo = dynamic_cast<FixtureLogObserver*>(observer.get());
@@ -295,7 +300,8 @@ TEST(OfflineDatabase, PutDoesNotStoreConnectionErrors) {
     using namespace mbgl;
 
     util::RunLoop loop;
-    OfflineDatabase db(":memory:");
+    StubFileSource fileSource;
+    OfflineDatabase db(":memory:", fileSource);
 
     Resource resource { Resource::Unknown, "http://example.com/" };
     Response response;
@@ -314,7 +320,8 @@ TEST(OfflineDatabase, PutDoesNotStoreServerErrors) {
     using namespace mbgl;
 
     util::RunLoop loop;
-    OfflineDatabase db(":memory:");
+    StubFileSource fileSource;
+    OfflineDatabase db(":memory:", fileSource);
 
     Resource resource { Resource::Unknown, "http://example.com/" };
     Response response;
@@ -333,7 +340,8 @@ TEST(OfflineDatabase, PutResource) {
     using namespace mbgl;
 
     util::RunLoop loop;
-    OfflineDatabase db(":memory:");
+    StubFileSource fileSource;
+    OfflineDatabase db(":memory:", fileSource);
 
     Resource resource { Resource::Style, "http://example.com/" };
     Response response;
@@ -353,7 +361,8 @@ TEST(OfflineDatabase, PutTile) {
     using namespace mbgl;
 
     util::RunLoop loop;
-    OfflineDatabase db(":memory:");
+    StubFileSource fileSource;
+    OfflineDatabase db(":memory:", fileSource);
 
     Resource resource { Resource::Tile, "http://example.com/" };
     resource.tileData = Resource::TileData {
@@ -380,7 +389,8 @@ TEST(OfflineDatabase, PutResourceNotFound) {
     using namespace mbgl;
 
     util::RunLoop loop;
-    OfflineDatabase db(":memory:");
+    StubFileSource fileSource;
+    OfflineDatabase db(":memory:", fileSource);
 
     Resource resource { Resource::Style, "http://example.com/" };
     Response response;
@@ -401,7 +411,8 @@ TEST(OfflineDatabase, PutTileNotFound) {
     using namespace mbgl;
 
     util::RunLoop loop;
-    OfflineDatabase db(":memory:");
+    StubFileSource fileSource;
+    OfflineDatabase db(":memory:", fileSource);
 
     Resource resource { Resource::Tile, "http://example.com/" };
     resource.tileData = Resource::TileData {
@@ -419,6 +430,112 @@ TEST(OfflineDatabase, PutTileNotFound) {
         EXPECT_NE(nullptr, res2->error);
         EXPECT_EQ(Response::Error::Reason::NotFound, res2->error->reason);
         EXPECT_FALSE(res2->data.get());
+        loop.stop();
+    });
+
+    loop.run();
+}
+
+TEST(OfflineDatabase, CreateRegion) {
+    using namespace mbgl;
+
+    util::RunLoop loop;
+    StubFileSource fileSource;
+    OfflineDatabase db(":memory:", fileSource);
+
+    OfflineRegionDefinition definition { "http://example.com/style", LatLngBounds::hull({1, 2}, {3, 4}), 5, 6, 2.0 };
+    OfflineRegionMetadata metadata {{ 1, 2, 3 }};
+
+    db.createRegion(definition, metadata, [&](std::exception_ptr error, optional<OfflineRegion> region) {
+        ASSERT_FALSE(error);
+        ASSERT_TRUE(bool(region));
+        EXPECT_EQ(definition.styleURL, region->getDefinition().styleURL);
+        EXPECT_EQ(definition.bounds, region->getDefinition().bounds);
+        EXPECT_EQ(definition.minZoom, region->getDefinition().minZoom);
+        EXPECT_EQ(definition.maxZoom, region->getDefinition().maxZoom);
+        EXPECT_EQ(definition.pixelRatio, region->getDefinition().pixelRatio);
+        EXPECT_EQ(metadata, region->getMetadata());
+        loop.stop();
+    });
+
+    loop.run();
+}
+
+TEST(OfflineDatabase, ListRegions) {
+    using namespace mbgl;
+
+    util::RunLoop loop;
+    StubFileSource fileSource;
+    OfflineDatabase db(":memory:", fileSource);
+
+    OfflineRegionDefinition definition { "http://example.com/style", LatLngBounds::hull({1, 2}, {3, 4}), 5, 6, 2.0 };
+    OfflineRegionMetadata metadata {{ 1, 2, 3 }};
+
+    db.createRegion(definition, metadata, [&](std::exception_ptr error1, optional<OfflineRegion>) {
+        ASSERT_FALSE(error1);
+
+        db.listRegions([&] (std::exception_ptr error2, optional<std::vector<OfflineRegion>> regions) {
+            ASSERT_FALSE(error2);
+            ASSERT_TRUE(bool(regions));
+            ASSERT_EQ(1, regions->size());
+            OfflineRegion* region = &regions->at(0);
+            EXPECT_EQ(definition.styleURL, region->getDefinition().styleURL);
+            EXPECT_EQ(definition.bounds, region->getDefinition().bounds);
+            EXPECT_EQ(definition.minZoom, region->getDefinition().minZoom);
+            EXPECT_EQ(definition.maxZoom, region->getDefinition().maxZoom);
+            EXPECT_EQ(definition.pixelRatio, region->getDefinition().pixelRatio);
+            EXPECT_EQ(metadata, region->getMetadata());
+            loop.stop();
+        });
+    });
+
+    loop.run();
+}
+
+TEST(OfflineDatabase, DeleteRegion) {
+    using namespace mbgl;
+
+    util::RunLoop loop;
+    StubFileSource fileSource;
+    OfflineDatabase db(":memory:", fileSource);
+
+    OfflineRegionDefinition definition { "http://example.com/style", LatLngBounds::hull({1, 2}, {3, 4}), 5, 6, 2.0 };
+    OfflineRegionMetadata metadata {{ 1, 2, 3 }};
+
+    db.createRegion(definition, metadata, [&](std::exception_ptr error1, optional<OfflineRegion> region) {
+        ASSERT_FALSE(error1);
+        ASSERT_TRUE(bool(region));
+
+        db.deleteRegion(std::move(*region), [&](std::exception_ptr error2) {
+            ASSERT_FALSE(error2);
+
+            db.listRegions([&] (std::exception_ptr error3, optional<std::vector<OfflineRegion>> regions) {
+                ASSERT_FALSE(error3);
+                ASSERT_TRUE(bool(regions));
+                ASSERT_EQ(0, regions->size());
+                loop.stop();
+            });
+        });
+    });
+
+    loop.run();
+}
+
+TEST(OfflineDatabase, CreateRegionInfiniteMaxZoom) {
+    using namespace mbgl;
+
+    util::RunLoop loop;
+    StubFileSource fileSource;
+    OfflineDatabase db(":memory:", fileSource);
+
+    OfflineRegionDefinition definition { "", LatLngBounds::world(), 0, INFINITY, 1.0 };
+    OfflineRegionMetadata metadata;
+
+    db.createRegion(definition, metadata, [&](std::exception_ptr error, optional<OfflineRegion> region) {
+        ASSERT_FALSE(error);
+        ASSERT_TRUE(bool(region));
+        EXPECT_EQ(0, region->getDefinition().minZoom);
+        EXPECT_EQ(INFINITY, region->getDefinition().maxZoom);
         loop.stop();
     });
 

@@ -26,12 +26,12 @@ class DefaultFileSource::Impl {
 public:
     Impl(const std::string& cachePath, const std::string& assetRoot)
         : assetFileSource(assetRoot),
-          offlineDatabaseThread(util::ThreadContext{"OfflineDatabase", util::ThreadType::Unknown, util::ThreadPriority::Low}, cachePath) {
+          offlineDatabaseThread(util::ThreadContext{"OfflineDatabase", util::ThreadType::Unknown, util::ThreadPriority::Low}, cachePath, onlineFileSource) {
     }
 
     AssetFileSource assetFileSource;
-    util::Thread<OfflineDatabase> offlineDatabaseThread;
     OnlineFileSource onlineFileSource;
+    util::Thread<OfflineDatabase> offlineDatabaseThread;
     bool offline = false;
 };
 
@@ -95,6 +95,32 @@ std::unique_ptr<FileRequest> DefaultFileSource::request(const Resource& resource
     } else {
         return std::make_unique<DefaultFileRequest>(resource, callback, impl.get());
     }
+}
+
+void DefaultFileSource::listOfflineRegions(std::function<void (std::exception_ptr, optional<std::vector<OfflineRegion>>)> callback) {
+    impl->offlineDatabaseThread.invoke(&OfflineDatabase::listRegions, callback);
+}
+
+void DefaultFileSource::createOfflineRegion(const OfflineRegionDefinition& definition,
+                                            const OfflineRegionMetadata& metadata,
+                                            std::function<void (std::exception_ptr, optional<OfflineRegion>)> callback) {
+    impl->offlineDatabaseThread.invoke(&OfflineDatabase::createRegion, definition, metadata, callback);
+}
+
+void DefaultFileSource::deleteOfflineRegion(OfflineRegion&& region, std::function<void (std::exception_ptr)> callback) {
+    impl->offlineDatabaseThread.invoke(&OfflineDatabase::deleteRegion, std::move(region), callback);
+}
+
+void DefaultFileSource::setOfflineRegionObserver(OfflineRegion& region, std::unique_ptr<OfflineRegionObserver> observer) {
+    impl->offlineDatabaseThread.invoke(&OfflineDatabase::setRegionObserver, region.getID(), std::move(observer));
+}
+
+void DefaultFileSource::setOfflineRegionDownloadState(OfflineRegion& region, OfflineRegionDownloadState state) {
+    impl->offlineDatabaseThread.invoke(&OfflineDatabase::setRegionDownloadState, region.getID(), state);
+}
+
+void DefaultFileSource::getOfflineRegionStatus(OfflineRegion& region, std::function<void (std::exception_ptr, optional<OfflineRegionStatus>)> callback) const {
+    impl->offlineDatabaseThread.invoke(&OfflineDatabase::getRegionStatus, region.getID(), callback);
 }
 
 void DefaultFileSource::put(const Resource& resource, const Response& response) {

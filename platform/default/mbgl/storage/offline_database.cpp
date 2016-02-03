@@ -1,4 +1,5 @@
 #include <mbgl/storage/offline_database.hpp>
+#include <mbgl/storage/offline_download.hpp>
 #include <mbgl/storage/response.hpp>
 #include <mbgl/util/compression.hpp>
 #include <mbgl/util/io.hpp>
@@ -6,6 +7,7 @@
 #include <mbgl/util/chrono.hpp>
 #include <mbgl/map/tile_id.hpp>
 #include <mbgl/platform/log.hpp>
+#include <mbgl/style/style_parser.hpp>
 
 #include "sqlite3.hpp"
 #include <sqlite3.h>
@@ -17,8 +19,9 @@ using namespace mapbox::sqlite;
 // WARNING: Bump the version when changing the cache scheme to force the table to be recreated.
 static const uint32_t schemaVersion = 2;
 
-OfflineDatabase::OfflineDatabase(const std::string& path_)
-    : path(path_) {
+OfflineDatabase::OfflineDatabase(const std::string& path_, FileSource& onlineFileSource_)
+    : path(path_),
+      onlineFileSource(onlineFileSource_) {
     ensureSchema();
 }
 
@@ -87,7 +90,7 @@ mapbox::sqlite::Statement& OfflineDatabase::getStatement(const char * sql) {
     return *(statements[sql] = std::make_unique<Statement>(db->prepare(sql)));
 }
 
-void OfflineDatabase::get(const Resource& resource, Callback callback) {
+void OfflineDatabase::get(const Resource& resource, std::function<void (optional<Response>)> callback) {
     if (resource.kind == Resource::Kind::Tile) {
         assert(resource.tileData);
         getTile(*resource.tileData, callback);
@@ -110,7 +113,7 @@ void OfflineDatabase::put(const Resource& resource, const Response& response) {
     }
 }
 
-void OfflineDatabase::getResource(const Resource& resource, Callback callback) {
+void OfflineDatabase::getResource(const Resource& resource, std::function<void (optional<Response>)> callback) {
     mapbox::sqlite::Statement& stmt = getStatement(
         //        0      1        2       3        4
         "SELECT etag, expires, modified, data, compressed "
@@ -185,7 +188,7 @@ void OfflineDatabase::putResource(const Resource& resource, const Response& resp
     }
 }
 
-void OfflineDatabase::getTile(const Resource::TileData& tile, Callback callback) {
+void OfflineDatabase::getTile(const Resource::TileData& tile, std::function<void (optional<Response>)> callback) {
     mapbox::sqlite::Statement& stmt = getStatement(
         //        0      1        2       3        4
         "SELECT etag, expires, modified, data, compressed "
@@ -290,6 +293,120 @@ void OfflineDatabase::putTile(const Resource::TileData& tile, const Response& re
 
         stmt2.run();
     }
+}
+
+void OfflineDatabase::listRegions(std::function<void (std::exception_ptr, optional<std::vector<OfflineRegion>>)> callback) {
+    mapbox::sqlite::Statement& stmt = getStatement(
+        "SELECT id, definition, description FROM regions");
+
+    std::vector<OfflineRegion> result;
+
+    while (stmt.run()) {
+        result.push_back(OfflineRegion(
+            stmt.get<int64_t>(0),
+            decodeOfflineRegionDefinition(stmt.get<std::string>(1)),
+            stmt.get<std::vector<uint8_t>>(2)));
+    }
+
+    callback(nullptr, std::move(result));
+}
+
+void OfflineDatabase::createRegion(const OfflineRegionDefinition& definition,
+                                   const OfflineRegionMetadata& metadata,
+                                   std::function<void (std::exception_ptr, optional<OfflineRegion>)> callback) {
+    mapbox::sqlite::Statement& stmt = getStatement(
+        "INSERT INTO regions (definition, description) "
+        "VALUES              (?1,         ?2) ");
+
+    stmt.bind(1, encodeOfflineRegionDefinition(definition));
+    stmt.bind(2, metadata);
+
+    stmt.run();
+
+    callback(nullptr, OfflineRegion(db->lastInsertRowid(), definition, metadata));
+}
+
+void OfflineDatabase::deleteRegion(OfflineRegion&& region, std::function<void (std::exception_ptr)> callback) {
+    mapbox::sqlite::Statement& stmt = getStatement(
+        "DELETE FROM regions WHERE id = ?");
+
+    stmt.bind(1, region.getID());
+    stmt.run();
+
+    callback(nullptr);
+}
+
+void OfflineDatabase::getRegionResource(int64_t regionID, const Resource& resource, std::function<void (optional<Response>)> callback) {
+    get(resource, [=] (optional<Response> response) {
+        if (response) {
+            markUsed(regionID, resource);
+        }
+
+        callback(response);
+    });
+}
+
+void OfflineDatabase::putRegionResource(int64_t regionID, const Resource& resource, const Response& response) {
+    put(resource, response);
+    markUsed(regionID, resource);
+}
+
+void OfflineDatabase::markUsed(int64_t regionID, const Resource& resource) {
+    if (resource.kind == Resource::Kind::Tile) {
+        mapbox::sqlite::Statement& stmt1 = getStatement(
+            "REPLACE INTO region_tiles (region_id, tileset_id,  x,  y,  z) "
+            "SELECT                     ?1,        tilesets.id, ?4, ?5, ?6 "
+            "FROM tilesets "
+            "WHERE url_template = ?2 "
+            "AND pixel_ratio    = ?3 ");
+
+        stmt1.bind(1, regionID);
+        stmt1.bind(2, resource.tileData->urlTemplate);
+        stmt1.bind(3, resource.tileData->pixelRatio);
+        stmt1.bind(4, resource.tileData->x);
+        stmt1.bind(5, resource.tileData->y);
+        stmt1.bind(6, resource.tileData->z);
+        stmt1.run();
+    } else {
+        mapbox::sqlite::Statement& stmt1 = getStatement(
+            "REPLACE INTO region_resources (region_id, resource_url) "
+            "VALUES                        (?1,        ?2) ");
+
+        stmt1.bind(1, regionID);
+        stmt1.bind(2, resource.url);
+        stmt1.run();
+    }
+}
+
+OfflineRegionDefinition OfflineDatabase::getRegionDefinition(int64_t regionID) {
+    mapbox::sqlite::Statement& stmt = getStatement(
+        "SELECT definition FROM regions WHERE id = ?1");
+
+    stmt.bind(1, regionID);
+    stmt.run();
+
+    return decodeOfflineRegionDefinition(stmt.get<std::string>(1));
+}
+
+OfflineDownload& OfflineDatabase::getDownload(int64_t regionID) {
+    auto it = downloads.find(regionID);
+    if (it != downloads.end()) {
+        return *it->second;
+    }
+    return *downloads.emplace(regionID,
+        std::make_unique<OfflineDownload>(regionID, getRegionDefinition(regionID), *this, onlineFileSource)).first->second;
+}
+
+void OfflineDatabase::setRegionObserver(int64_t regionID, std::unique_ptr<OfflineRegionObserver> observer) {
+    getDownload(regionID).setObserver(std::move(observer));
+}
+
+void OfflineDatabase::setRegionDownloadState(int64_t regionID, OfflineRegionDownloadState state) {
+    getDownload(regionID).setState(state);
+}
+
+void OfflineDatabase::getRegionStatus(int64_t regionID, std::function<void (std::exception_ptr, optional<OfflineRegionStatus>)> callback) {
+    getDownload(regionID).getStatus(callback);
 }
 
 } // namespace mbgl

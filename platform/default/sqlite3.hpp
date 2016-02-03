@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <stdexcept>
 
 typedef struct sqlite3 sqlite3;
@@ -43,6 +44,8 @@ public:
     void exec(const std::string &sql);
     Statement prepare(const char *query);
 
+    int64_t lastInsertRowid() const;
+
 private:
     sqlite3 *db = nullptr;
 };
@@ -63,7 +66,10 @@ public:
     operator bool() const;
 
     template <typename T> void bind(int offset, T value);
-    void bind(int offset, const std::string &value, bool retain = true);
+
+    void bind(int offset, const std::string&, bool retain = true);
+    void bind(int offset, const std::vector<uint8_t>&, bool retain = true);
+
     template <typename T> T get(int offset);
 
     bool run();
